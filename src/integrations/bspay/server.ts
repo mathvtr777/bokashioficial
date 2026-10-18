@@ -2538,9 +2538,14 @@ export interface SupabaseAuthUserRecord {
   referredByUserId?: string | undefined;
 }
 
+const DEFAULT_SUPABASE_URL = "https://gnelpocqtzphzmmsouix.supabase.co";
+const DEFAULT_SERVICE_ROLE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImduZWxwb2NxdHpwaHptbXNvdWl4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MjAyNjU4NCwiZXhwIjoyMTA3NjAyNTg0fQ.nY3kDLY2sj1WVJHHtVtNafNSRFwnXbnQMg9bJpPWPkk";
+
 export async function fetchAllSupabaseAuthUsers(): Promise<SupabaseAuthUserRecord[]> {
-  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL");
-  const serviceRoleKey = getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL") || DEFAULT_SUPABASE_URL;
+  const serviceRoleKey =
+    getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY") || DEFAULT_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) return [];
 
   try {
@@ -2606,8 +2611,9 @@ export async function updateSupabaseUserReferralMetadata(
   referrerEmail?: string | null | undefined,
   referrerUserId?: string | null | undefined
 ) {
-  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL");
-  const serviceRoleKey = getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL") || DEFAULT_SUPABASE_URL;
+  const serviceRoleKey =
+    getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY") || DEFAULT_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey || !userId) return;
 
   try {
