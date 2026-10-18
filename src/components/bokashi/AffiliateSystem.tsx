@@ -102,7 +102,10 @@ export function IndiqueEGanheView() {
   const availableBalance = data?.stats.availableBalance ?? 0;
   const pendingWithdrawals = data?.stats.pendingWithdrawals ?? 0;
 
-  const referralLink = `https://bokashipay.com/cadastro?ref=${refCode}`;
+  const referralLink =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/cadastro?ref=${refCode}`
+      : `https://bokashipay.com/cadastro?ref=${refCode}`;
 
   const [preset, setPreset] = useState<MessagePresetKey>("direto");
   const [customMessage, setCustomMessage] = useState("");

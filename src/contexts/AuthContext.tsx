@@ -158,11 +158,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const refCode = localStorage.getItem("bokashipay_ref_code");
       if (refCode && refCode.trim()) {
+        const cleanRef = refCode.trim().toUpperCase();
+        if (isSupabaseConfigured) {
+          void supabase.auth
+            .updateUser({
+              data: {
+                referred_by_code: cleanRef,
+              },
+            })
+            .catch(() => {});
+        }
         void fetch("/api/affiliates/register-referral", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            refCode: refCode.trim().toUpperCase(),
+            refCode: cleanRef,
             referredUserId: user.id,
             referredName: fullName,
             referredEmail: user.email,
@@ -288,6 +298,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let referralLinked = false;
     let resolvedUserId: string | undefined;
 
+    const effectiveRef = (refCode || "").trim().toUpperCase();
+
     // 1. Try client-side Supabase signUp first if configured
     if (isSupabaseConfigured) {
       try {
@@ -297,6 +309,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           options: {
             data: {
               full_name: cleanName,
+              referred_by_code: effectiveRef || undefined,
             },
           },
         });
@@ -318,7 +331,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name: cleanName,
           email: cleanEmail,
           password,
-          refCode: refCode || undefined,
+          refCode: effectiveRef || undefined,
         }),
       });
       const regJson = (await regRes.json().catch(() => ({}))) as {

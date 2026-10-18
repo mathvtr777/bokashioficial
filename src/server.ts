@@ -1303,7 +1303,7 @@ async function handleRequest(request: Request, env: unknown, ctx: unknown): Prom
           referredName?: string;
           referredEmail?: string;
         };
-        const referral = registerAffiliateReferral({
+        const referral = await registerAffiliateReferral({
           refCode: body.refCode || "",
           referredUserId: body.referredUserId || "",
           referredName: body.referredName,
@@ -1496,7 +1496,7 @@ async function handleRequest(request: Request, env: unknown, ctx: unknown): Prom
           body.refCode &&
           body.referredUserId
         ) {
-          const referral = registerAffiliateReferral({
+          const referral = await registerAffiliateReferral({
             refCode: body.refCode,
             referredUserId: body.referredUserId,
             referredName: body.referredName,

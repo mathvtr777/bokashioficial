@@ -2527,54 +2527,129 @@ function getServerEnvVar(key: string): string | undefined {
   return undefined;
 }
 
+export interface SupabaseAuthUserRecord {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  refCode: string;
+  referredByCode?: string | undefined;
+  referredByEmail?: string | undefined;
+  referredByUserId?: string | undefined;
+}
+
+export async function fetchAllSupabaseAuthUsers(): Promise<SupabaseAuthUserRecord[]> {
+  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL");
+  const serviceRoleKey = getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) return [];
+
+  try {
+    const res = await fetch(
+      `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/admin/users?page=1&per_page=500`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          apikey: serviceRoleKey,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json().catch(() => ({}))) as {
+      users?: Array<{
+        id?: string;
+        email?: string;
+        created_at?: string;
+        user_metadata?: {
+          full_name?: string;
+          name?: string;
+          affiliate_ref_code?: string;
+          referred_by_code?: string;
+          referred_by_email?: string;
+          referred_by_user_id?: string;
+        };
+      }>;
+    };
+    return (data.users ?? [])
+      .filter((u): u is typeof u & { id: string } => Boolean(u.id))
+      .map((u) => {
+        const email = u.email || "cliente@bokashipay.com";
+        const name =
+          u.user_metadata?.full_name ||
+          u.user_metadata?.name ||
+          email.split("@")[0] ||
+          "Cliente";
+        return {
+          id: u.id,
+          email,
+          name,
+          createdAt: u.created_at || new Date().toISOString(),
+          refCode:
+            u.user_metadata?.affiliate_ref_code ||
+            generateDeterministicRefCode(u.id),
+          referredByCode: u.user_metadata?.referred_by_code,
+          referredByEmail: u.user_metadata?.referred_by_email,
+          referredByUserId: u.user_metadata?.referred_by_user_id,
+        };
+      });
+  } catch (err) {
+    console.error("Erro ao listar usuários do Supabase Auth:", err);
+    return [];
+  }
+}
+
+export async function updateSupabaseUserReferralMetadata(
+  userId: string,
+  refCode: string,
+  referrerEmail?: string | null | undefined,
+  referrerUserId?: string | null | undefined
+) {
+  const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL");
+  const serviceRoleKey = getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey || !userId) return;
+
+  try {
+    await fetch(
+      `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/admin/users/${userId}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          apikey: serviceRoleKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_metadata: {
+            referred_by_code: refCode.trim().toUpperCase(),
+            ...(referrerEmail ? { referred_by_email: referrerEmail.trim().toLowerCase() } : {}),
+            ...(referrerUserId ? { referred_by_user_id: referrerUserId } : {}),
+          },
+        }),
+      }
+    );
+  } catch (err) {
+    console.error("Erro ao atualizar metadata no Supabase:", err);
+  }
+}
+
 export async function listAdminUsersWithNtfy(): Promise<AdminUserNtfySummary[]> {
   const userMap = new Map<
     string,
     { userId: string; name: string; email: string; createdAt: string }
   >();
 
-  // 1. Fetch real users from Supabase Auth Admin API if available
+  // 1. Fetch real users from Supabase Auth Admin API
   try {
-    const supabaseUrl = getServerEnvVar("VITE_SUPABASE_URL");
-    const serviceRoleKey = getServerEnvVar("SUPABASE_SERVICE_ROLE_KEY");
-    if (supabaseUrl && serviceRoleKey) {
-      const res = await fetch(
-        `${supabaseUrl.replace(/\/+$/, "")}/auth/v1/admin/users?page=1&per_page=200`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${serviceRoleKey}`,
-            apikey: serviceRoleKey,
-            Accept: "application/json",
-          },
-          signal: AbortSignal.timeout(1200),
-        }
-      );
-      if (res.ok) {
-        const data = (await res.json().catch(() => ({}))) as {
-          users?: Array<{
-            id?: string;
-            email?: string;
-            created_at?: string;
-            user_metadata?: { full_name?: string; name?: string };
-          }>;
-        };
-        for (const u of data.users ?? []) {
-          if (!u.id) continue;
-          const email = u.email || "cliente@bokashipay.com";
-          const name =
-            u.user_metadata?.full_name ||
-            u.user_metadata?.name ||
-            email.split("@")[0] ||
-            "Cliente BokashiPay";
-          userMap.set(u.id, {
-            userId: u.id,
-            name,
-            email,
-            createdAt: u.created_at || new Date().toISOString(),
-          });
-        }
-      }
+    const supabaseUsers = await fetchAllSupabaseAuthUsers();
+    for (const u of supabaseUsers) {
+      userMap.set(u.id, {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        createdAt: u.createdAt,
+      });
     }
   } catch {
     // ignore
@@ -2939,7 +3014,8 @@ function isGenericAffiliateEmail(email?: string | null): boolean {
 export function ensureAffiliateProfile(
   userId: string,
   name?: string | null,
-  email?: string | null
+  email?: string | null,
+  customRefCode?: string | null
 ): AffiliateProfile {
   const store = loadAffiliatesStore();
   const uid = (userId || "guest").trim();
@@ -2951,6 +3027,7 @@ export function ensureAffiliateProfile(
     const next = { ...existing };
     const incomingName = (name || "").trim();
     const incomingEmail = (email || "").trim().toLowerCase();
+    const incomingRefCode = (customRefCode || "").trim().toUpperCase();
 
     if (
       incomingName &&
@@ -2972,6 +3049,17 @@ export function ensureAffiliateProfile(
       changed = true;
     }
 
+    if (
+      incomingRefCode &&
+      next.refCode.toUpperCase() !== incomingRefCode &&
+      !Object.values(store.profiles).some(
+        (p) => p.userId !== uid && p.refCode.toUpperCase() === incomingRefCode
+      )
+    ) {
+      next.refCode = incomingRefCode;
+      changed = true;
+    }
+
     if (changed) {
       next.updatedAt = now;
       store.profiles[uid] = next;
@@ -2986,11 +3074,13 @@ export function ensureAffiliateProfile(
     return next;
   }
 
-  let refCode = generateDeterministicRefCode(uid);
-  const usedCodes = new Set(
-    Object.values(store.profiles).map((p) => p.refCode.toUpperCase())
+  let refCode =
+    (customRefCode || "").trim().toUpperCase() ||
+    generateDeterministicRefCode(uid);
+  const conflicting = Object.values(store.profiles).find(
+    (p) => p.userId !== uid && p.refCode.toUpperCase() === refCode.toUpperCase()
   );
-  if (usedCodes.has(refCode)) {
+  if (conflicting) {
     refCode = `${refCode.slice(0, 5)}${Math.floor(100 + Math.random() * 900)}`;
   }
 
@@ -3039,12 +3129,12 @@ export function getReferrerInfoByCode(refCode: string): {
   };
 }
 
-export function registerAffiliateReferral(input: {
+export async function registerAffiliateReferral(input: {
   refCode: string;
   referredUserId: string;
   referredName?: string | null | undefined;
   referredEmail?: string | null | undefined;
-}): AffiliateReferral | null {
+}): Promise<AffiliateReferral | null> {
   const cleanCode = (input.refCode || "").trim().toUpperCase();
   const referredUid = (input.referredUserId || "").trim();
   const cleanEmail = (input.referredEmail || "").trim().toLowerCase();
@@ -3059,10 +3149,20 @@ export function registerAffiliateReferral(input: {
     ensureAffiliateProfile(referredUid, cleanName, cleanEmail);
   }
 
-  const store = loadAffiliatesStore();
-  const referrerProfile = Object.values(store.profiles).find(
+  let store = loadAffiliatesStore();
+  let referrerProfile = Object.values(store.profiles).find(
     (p) => p.refCode.toUpperCase() === cleanCode
   );
+
+  // If referrer not yet in memory store, try syncing from real Supabase Auth users
+  if (!referrerProfile) {
+    await syncRealUsersToAffiliateStore(true);
+    store = loadAffiliatesStore();
+    referrerProfile = Object.values(store.profiles).find(
+      (p) => p.refCode.toUpperCase() === cleanCode
+    );
+  }
+
   if (!referrerProfile) return null;
 
   // Cannot refer yourself (unless referrer is guest placeholder being tested)
@@ -3074,6 +3174,14 @@ export function registerAffiliateReferral(input: {
   ) {
     return null;
   }
+
+  // Update Supabase user metadata permanently
+  await updateSupabaseUserReferralMetadata(
+    referredUid,
+    referrerProfile.refCode,
+    referrerProfile.email,
+    referrerProfile.userId
+  );
 
   // Check if this user was already referred (by userId or email)
   const existingIdx = store.referrals.findIndex(
@@ -3088,6 +3196,8 @@ export function registerAffiliateReferral(input: {
     const existingRef = store.referrals[existingIdx]!;
     const updatedRef: AffiliateReferral = {
       ...existingRef,
+      affiliateUserId: referrerProfile.userId,
+      refCode: referrerProfile.refCode,
       referredUserId: referredUid,
       referredName:
         cleanName && cleanName !== "Indicado"
@@ -3127,7 +3237,10 @@ export function getAffiliateSummaryForUser(
   const store = loadAffiliatesStore();
 
   const referrals = store.referrals.filter(
-    (r) => r.affiliateUserId === profile.userId
+    (r) =>
+      r.affiliateUserId === profile.userId ||
+      (Boolean(profile.refCode) &&
+        r.refCode.toUpperCase() === profile.refCode.toUpperCase())
   );
   const commissions = store.commissions.filter(
     (c) => c.affiliateUserId === profile.userId
@@ -3452,7 +3565,7 @@ function saveLocalUsers(users: Record<string, LocalUserAccount>) {
 
 let lastAffiliateUserSyncAt = 0;
 
-export async function syncRealUsersToAffiliateStore() {
+export async function syncRealUsersToAffiliateStore(force = false) {
   const now = Date.now();
   const store = loadAffiliatesStore();
 
@@ -3464,21 +3577,94 @@ export async function syncRealUsersToAffiliateStore() {
     }
   }
 
-  // Only poll external Supabase users list at most once every 60s
-  if (now - lastAffiliateUserSyncAt > 60_000) {
+  // Poll external Supabase users list
+  const shouldSyncSupabase =
+    force ||
+    now - lastAffiliateUserSyncAt > 10_000 ||
+    Object.keys(store.profiles).length <= 1;
+
+  if (shouldSyncSupabase) {
     lastAffiliateUserSyncAt = now;
     try {
-      const knownUsers = await listAdminUsersWithNtfy();
-      for (const u of knownUsers) {
+      const supaUsers = await fetchAllSupabaseAuthUsers();
+      // Map all ref codes to user profiles
+      const userByCode = new Map<
+        string,
+        { id: string; name: string; email: string; refCode: string }
+      >();
+
+      for (const u of supaUsers) {
         if (
-          u.userId &&
-          u.userId !== "guest" &&
-          u.userId !== "admin-master" &&
+          u.id &&
+          u.id !== "guest" &&
+          u.id !== "admin-master" &&
           !isGenericAffiliateEmail(u.email)
         ) {
-          ensureAffiliateProfile(u.userId, u.name, u.email);
+          const prof = ensureAffiliateProfile(u.id, u.name, u.email, u.refCode);
+          store.profiles[u.id] = prof;
+          userByCode.set(prof.refCode.toUpperCase(), {
+            id: u.id,
+            name: prof.name,
+            email: prof.email,
+            refCode: prof.refCode,
+          });
+          if (u.refCode && u.refCode.toUpperCase() !== prof.refCode.toUpperCase()) {
+            userByCode.set(u.refCode.toUpperCase(), {
+              id: u.id,
+              name: prof.name,
+              email: prof.email,
+              refCode: prof.refCode,
+            });
+          }
         }
       }
+
+      // Link any user that has referredByCode or referredByUserId
+      for (const u of supaUsers) {
+        const refCode = (u.referredByCode || "").trim().toUpperCase();
+        const refUserId = (u.referredByUserId || "").trim();
+        let referrer = refCode ? userByCode.get(refCode) : null;
+        if (!referrer && refUserId) {
+          const found = supaUsers.find((s) => s.id === refUserId);
+          if (found) {
+            referrer = {
+              id: found.id,
+              name: found.name,
+              email: found.email,
+              refCode: found.refCode,
+            };
+          }
+        }
+
+        if (referrer && referrer.id !== u.id) {
+          const existing = store.referrals.find(
+            (r) =>
+              r.referredUserId === u.id ||
+              (u.email &&
+                !isGenericAffiliateEmail(u.email) &&
+                r.referredEmail.toLowerCase() === u.email.toLowerCase())
+          );
+          if (!existing) {
+            store.referrals.unshift({
+              id: `REF-SUPA-${u.id.slice(0, 8).toUpperCase()}`,
+              affiliateUserId: referrer.id,
+              refCode: referrer.refCode,
+              referredUserId: u.id,
+              referredName: u.name,
+              referredEmail: u.email,
+              status: "active",
+              createdAt: u.createdAt || new Date().toISOString(),
+            });
+          } else {
+            existing.affiliateUserId = referrer.id;
+            existing.refCode = referrer.refCode;
+            existing.referredUserId = u.id;
+            existing.referredName = u.name;
+            existing.referredEmail = u.email;
+          }
+        }
+      }
+      saveAffiliatesStore(store);
     } catch {
       // ignore
     }
@@ -3487,7 +3673,11 @@ export async function syncRealUsersToAffiliateStore() {
   // Remove old placeholder profiles that have no referrals/commissions/withdrawals
   let removedAny = false;
   for (const [uid, prof] of Object.entries(store.profiles)) {
-    const hasRefs = store.referrals.some((r) => r.affiliateUserId === uid);
+    const hasRefs = store.referrals.some(
+      (r) =>
+        r.affiliateUserId === uid ||
+        (prof.refCode && r.refCode.toUpperCase() === prof.refCode.toUpperCase())
+    );
     const hasComms = store.commissions.some((c) => c.affiliateUserId === uid);
     const hasWiths = store.withdrawals.some((w) => w.affiliateUserId === uid);
     if (
@@ -3558,7 +3748,7 @@ export async function registerUserAccountServer(input: {
   // If this user registered using someone's affiliate link (?ref=CODE), link them immediately
   let referral: AffiliateReferral | null = null;
   if (input.refCode && input.refCode.trim()) {
-    referral = registerAffiliateReferral({
+    referral = await registerAffiliateReferral({
       refCode: input.refCode.trim().toUpperCase(),
       referredUserId: resolvedUserId,
       referredName: cleanName,
@@ -3602,7 +3792,7 @@ export function authenticateLocalUserAccount(input: {
 }
 
 export async function listAdminAffiliatesOverview() {
-  await syncRealUsersToAffiliateStore();
+  await syncRealUsersToAffiliateStore(true);
   const store = loadAffiliatesStore();
 
   const allProfiles = Object.values(store.profiles).filter(
