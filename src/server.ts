@@ -99,9 +99,48 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
-export default {
-  async fetch(request: Request, env: unknown, ctx: unknown) {
-    const url = new URL(request.url);
+export function applySecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+
+  // 1. Strict-Transport-Security (HSTS)
+  headers.set(
+    "Strict-Transport-Security",
+    "max-age=31536000; includeSubDomains; preload"
+  );
+
+  // 2. Content-Security-Policy (CSP)
+  headers.set(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https: wss: http://localhost:* ws://localhost:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';"
+  );
+
+  // 3. X-Frame-Options (Proteção contra clickjacking)
+  headers.set("X-Frame-Options", "DENY");
+
+  // 4. X-Content-Type-Options (Previne MIME sniffing)
+  headers.set("X-Content-Type-Options", "nosniff");
+
+  // 5. X-XSS-Protection (Filtro XSS do browser)
+  headers.set("X-XSS-Protection", "1; mode=block");
+
+  // 6. Referrer-Policy (Controle de referrer)
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+
+  // 7. Permissions-Policy (Permissões de features)
+  headers.set(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(self)"
+  );
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function handleRequest(request: Request, env: unknown, ctx: unknown): Promise<Response> {
+  const url = new URL(request.url);
 
     if (url.pathname === "/api/bspay/transfer" && request.method === "POST") {
       try {
@@ -1488,14 +1527,40 @@ export default {
       }
     }
 
-    if (
-      (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) &&
-      request.method === "GET" &&
-      (request.headers.get("accept") || "").includes("text/html")
-    ) {
+    // Defense in Depth: Hide administrative panel endpoint from unauthenticated scanners & public crawlers
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       if (!verifyAdminRequest(request)) {
-        const loginUrl = new URL("/auth?redirect=/admin", url.origin);
-        return Response.redirect(loginUrl.toString(), 302);
+        return new Response(
+          `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>404 — Página não encontrada</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0c100d; color: #f3f4f6; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { text-align: center; max-width: 420px; padding: 2rem; }
+    h1 { font-size: 5rem; margin: 0; color: #22c55e; }
+    h2 { font-size: 1.5rem; margin: 1rem 0 0.5rem; }
+    p { color: #9ca3af; font-size: 0.95rem; line-height: 1.5; }
+    a { display: inline-block; margin-top: 1.5rem; background: #16a34a; color: #fff; padding: 0.75rem 1.5rem; border-radius: 0.5rem; text-decoration: none; font-weight: 600; }
+    a:hover { background: #15803d; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>404</h1>
+    <h2>Página não encontrada</h2>
+    <p>A página que você procura não existe ou foi removida.</p>
+    <a href="/">Voltar ao início</a>
+  </div>
+</body>
+</html>`,
+          {
+            status: 404,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }
+        );
       }
     }
 
@@ -1510,5 +1575,11 @@ export default {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     }
+  }
+
+export default {
+  async fetch(request: Request, env: unknown, ctx: unknown) {
+    const response = await handleRequest(request, env, ctx);
+    return applySecurityHeaders(response);
   },
 };

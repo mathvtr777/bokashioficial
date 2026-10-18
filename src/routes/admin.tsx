@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute, notFound, useNavigate, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ShieldCheck,
@@ -72,21 +72,10 @@ export const Route = createFileRoute("/admin")({
           authenticated?: boolean;
         };
         if (!res.ok || !data.authenticated) {
-          throw redirect({
-            to: "/auth",
-            search: { redirect: "/admin" },
-            replace: true,
-          });
+          throw notFound();
         }
       } catch (err) {
-        if (err && typeof err === "object" && "to" in err) {
-          throw err;
-        }
-        throw redirect({
-          to: "/auth",
-          search: { redirect: "/admin" },
-          replace: true,
-        });
+        throw notFound();
       }
     }
   },

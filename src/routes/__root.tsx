@@ -93,6 +93,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:image", content: "/bokashipay-logo.png" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:image", content: "/bokashipay-logo.png" },
+      { httpEquiv: "X-Content-Type-Options", content: "nosniff" },
+      { httpEquiv: "X-Frame-Options", content: "DENY" },
+      { httpEquiv: "X-XSS-Protection", content: "1; mode=block" },
+      { name: "referrer", content: "strict-origin-when-cross-origin" },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
