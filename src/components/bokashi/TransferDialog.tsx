@@ -165,7 +165,7 @@ export function TransferDialog({
 
   const defaultClientName = user
     ? String(user.user_metadata?.["full_name"] || user.email?.split("@")[0] || "Cliente")
-    : "mathvtr2";
+    : "Cliente";
   const [clientName, setClientName] = useState(defaultClientName);
 
   useEffect(() => {
@@ -228,7 +228,7 @@ export function TransferDialog({
           pixKey: pixKey.trim(),
           description: description.trim(),
           clientName: clientName.trim() || defaultClientName,
-          clientEmail: user?.email || "mathvtr2@bokashipay.com",
+          clientEmail: user?.email || "cliente@bokashipay.com",
         },
         user?.id
       ),

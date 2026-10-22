@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
-import { Bell, ChevronDown, HelpCircle, LogIn, LogOut, Settings, ShieldCheck } from "lucide-react";
+import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
+import { Bell, ChevronDown, HelpCircle, LogIn, LogOut, Settings, ShieldCheck, User } from "lucide-react";
 import { Logo } from "./Logo";
 import { groups, mainNav, otherNav, type NavLeaf } from "./nav";
 import { cn } from "@/lib/utils";
@@ -47,7 +47,13 @@ export function Sidebar({ onNav }: { onNav?: (() => void) | undefined }) {
     Object.fromEntries(groups.map((g) => [g.title, g.title === "Financeiro" || g.children.some((c) => isActive(c.slug))])),
   );
 
+  const navigate = useNavigate();
   const { user, isAdmin, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate({ to: "/auth" });
+  };
 
   const getInitials = () => {
     if (isAdmin) return "AD";
@@ -84,7 +90,7 @@ export function Sidebar({ onNav }: { onNav?: (() => void) | undefined }) {
                 </p>
               </div>
               <button
-                onClick={() => signOut()}
+                onClick={handleSignOut}
                 title="Encerrar sessão"
                 className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
               >
@@ -103,10 +109,12 @@ export function Sidebar({ onNav }: { onNav?: (() => void) | undefined }) {
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-primary-soft font-display text-xs font-bold text-primary">MV</div>
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-2 text-muted-foreground">
+              <User className="h-4 w-4" />
+            </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">mathvtr2</p>
-              <p className="truncate text-xs text-muted-foreground">Conta verificada</p>
+              <p className="truncate text-sm font-semibold text-foreground">Visitante</p>
+              <p className="truncate text-xs text-muted-foreground">Não conectado</p>
             </div>
             <Link
               to="/auth"
