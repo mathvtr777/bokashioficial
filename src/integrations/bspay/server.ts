@@ -405,13 +405,19 @@ export async function processBspayReceive(
       ? `WALLET-${json.data.wallet_id}`
       : input.externalId;
 
-    if (input.userId) {
-      registerUserTransactionOwnership(
-        input.userId,
-        resolvedTxId,
-        input.externalId
-      );
-    }
+    const effectiveUser = (input.userId || "guest").trim();
+    registerUserTransactionOwnership(
+      effectiveUser,
+      resolvedTxId,
+      input.externalId
+    );
+    void notifyUserPixGeneratedIfEligible(
+      effectiveUser,
+      resolvedTxId,
+      input.externalId,
+      Number(input.amount || 0),
+      input.description
+    );
 
     return {
       transactionId: resolvedTxId,
@@ -495,20 +501,19 @@ export async function processBspayReceive(
 
   const resolvedTxId = json.data?.transaction_id || input.externalId;
 
-  if (input.userId) {
-    registerUserTransactionOwnership(
-      input.userId,
-      resolvedTxId,
-      input.externalId
-    );
-    void notifyUserPixGeneratedIfEligible(
-      input.userId,
-      resolvedTxId,
-      input.externalId,
-      Number(json.data?.amount ?? amount),
-      input.description
-    );
-  }
+  const effectiveUser = (input.userId || "guest").trim();
+  registerUserTransactionOwnership(
+    effectiveUser,
+    resolvedTxId,
+    input.externalId
+  );
+  void notifyUserPixGeneratedIfEligible(
+    effectiveUser,
+    resolvedTxId,
+    input.externalId,
+    Number(json.data?.amount ?? amount),
+    input.description
+  );
 
   return {
     transactionId: resolvedTxId,
@@ -803,7 +808,7 @@ const USER_TX_OWNERS_FILE = path.resolve(
 
 let memoryTxOwners: UserTxOwnershipStore | null = null;
 
-function loadUserTxOwners(): UserTxOwnershipStore {
+export function loadUserTxOwners(): UserTxOwnershipStore {
   if (memoryTxOwners) return memoryTxOwners;
   try {
     if (fs.existsSync(USER_TX_OWNERS_FILE)) {
@@ -2370,9 +2375,9 @@ export async function notifyUserPixGeneratedIfEligible(
   amount: number,
   description?: string | null
 ): Promise<void> {
-  if (!userId) return;
+  const targetUser = (userId || "guest").trim();
   try {
-    const settings = getUserNtfySettings(userId);
+    const settings = getUserNtfySettings(targetUser);
     const all = loadAllNtfySettings();
     const watched = new Set(settings.watchedTxIds ?? []);
     if (transactionId) watched.add(transactionId);
@@ -2384,15 +2389,38 @@ export async function notifyUserPixGeneratedIfEligible(
     };
     saveAllNtfySettings({ ...all });
 
-    if (!settings.notifyPixGenerated || !settings.topic) return;
+    // Send push to target user topic + all configured active topics so merchant never misses notifications
+    const topicsToSend = new Set<string>();
+    if (settings.notifyPixGenerated && settings.topic) {
+      topicsToSend.add(settings.topic.trim());
+    }
+    for (const [uid, u] of Object.entries(all)) {
+      if (u.notifyPixGenerated && u.topic && (uid === "admin-master" || uid === "guest" || uid === targetUser)) {
+        topicsToSend.add(u.topic.trim());
+      }
+    }
 
     const descSuffix = description?.trim() ? ` • ${description.trim()}` : "";
-    await sendNtfyPush({
-      topic: settings.topic,
-      title: "BokashiPay: PIX gerado (venda iniciada)",
-      message: `Cobrança PIX de ${formatBrlPlain(amount)} iniciada${descSuffix}. Aguardando pagamento.`,
-      tags: ["qrcode", "hourglass_flowing_sand"],
-      priority: 4,
+    const title = "BokashiPay: PIX gerado (venda iniciada)";
+    const message = `Cobrança PIX de ${formatBrlPlain(amount)} iniciada${descSuffix}. Aguardando pagamento.`;
+
+    for (const topic of topicsToSend) {
+      void sendNtfyPush({
+        topic,
+        title,
+        message,
+        tags: ["qrcode", "hourglass_flowing_sand"],
+        priority: 4,
+      });
+    }
+
+    // Also register in-app notification in bell inbox
+    void sendAdminCustomNotification({
+      targetUserId: targetUser,
+      targetUserName: targetUser === "guest" ? "Visitante / Padrão" : `Usuário ${targetUser.slice(0, 8)}`,
+      title,
+      message,
+      category: "info",
     });
   } catch {
     // ignore push errors so transaction flow never breaks
@@ -2406,9 +2434,9 @@ export async function notifyUserPixPaidIfEligible(
   description?: string | null,
   externalId?: string | null
 ): Promise<void> {
-  if (!userId) return;
+  const targetUser = (userId || "guest").trim();
   try {
-    const settings = getUserNtfySettings(userId);
+    const settings = getUserNtfySettings(targetUser);
     const notified = new Set(settings.notifiedPaidTxIds ?? []);
     if (
       (transactionId && notified.has(transactionId)) ||
@@ -2427,15 +2455,37 @@ export async function notifyUserPixPaidIfEligible(
     };
     saveAllNtfySettings({ ...all });
 
-    if (!settings.notifyPixPaid || !settings.topic) return;
+    const topicsToSend = new Set<string>();
+    if (settings.notifyPixPaid && settings.topic) {
+      topicsToSend.add(settings.topic.trim());
+    }
+    for (const [uid, u] of Object.entries(all)) {
+      if (u.notifyPixPaid && u.topic && (uid === "admin-master" || uid === "guest" || uid === targetUser)) {
+        topicsToSend.add(u.topic.trim());
+      }
+    }
 
     const descSuffix = description?.trim() ? ` (${description.trim()})` : "";
-    await sendNtfyPush({
-      topic: settings.topic,
-      title: "BokashiPay: PIX pago (venda confirmada)",
-      message: `Venda confirmada! Você recebeu ${formatBrlPlain(amount)} via PIX${descSuffix}.`,
-      tags: ["white_check_mark", "moneybag"],
-      priority: 5,
+    const title = "BokashiPay: PIX pago (venda confirmada)";
+    const message = `Venda confirmada! Você recebeu ${formatBrlPlain(amount)} via PIX${descSuffix}.`;
+
+    for (const topic of topicsToSend) {
+      void sendNtfyPush({
+        topic,
+        title,
+        message,
+        tags: ["white_check_mark", "moneybag"],
+        priority: 5,
+      });
+    }
+
+    // Also register in-app notification in bell inbox
+    void sendAdminCustomNotification({
+      targetUserId: targetUser,
+      targetUserName: targetUser === "guest" ? "Visitante / Padrão" : `Usuário ${targetUser.slice(0, 8)}`,
+      title,
+      message,
+      category: "success",
     });
   } catch {
     // ignore push errors

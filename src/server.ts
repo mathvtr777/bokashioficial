@@ -27,7 +27,9 @@ import {
   listCustomNotifications,
   listPaymentLinksForUser,
   listWithdrawalRequests,
+  loadUserTxOwners,
   markCustomNotificationRead,
+  notifyUserPixPaidIfEligible,
   processBspayReceive,
   processBspayTransfer,
   recordAdminTxDelete,
@@ -221,6 +223,54 @@ async function handleRequest(request: Request, env: unknown, ctx: unknown): Prom
             headers: { "content-type": "application/json; charset=utf-8" },
           }
         );
+      }
+    }
+
+    if (
+      (url.pathname === "/api/bspay/webhook" || url.pathname === "/api/webhook") &&
+      request.method === "POST"
+    ) {
+      try {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const data = (body?.data || body || {}) as any;
+        const rawStatus = String(data.status || body.event || body.status || "").toLowerCase();
+        const txId = String(data.transaction_id || body.transaction_id || data.id || "");
+        const extId = String(data.external_id || body.external_id || "");
+        const amount = Number(data.amount || body.amount || 0);
+        const payerObj = (data.payer || body.payer) as { name?: string } | undefined;
+        const payerName = payerObj?.name || "";
+
+        const isPaid =
+          rawStatus === "confirmed" ||
+          rawStatus === "paid" ||
+          rawStatus === "completed" ||
+          rawStatus.includes("confirm");
+
+        if (isPaid && (txId || extId)) {
+          const store = loadUserTxOwners();
+          const ownerId =
+            (txId && store.byTxId[txId]) ||
+            (extId && store.byTxId[extId]) ||
+            "guest";
+
+          void notifyUserPixPaidIfEligible(
+            ownerId,
+            txId || extId,
+            amount,
+            payerName ? `Pagador: ${payerName}` : null,
+            extId || null
+          );
+        }
+
+        return new Response(JSON.stringify({ success: true, received: true }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      } catch {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
       }
     }
 

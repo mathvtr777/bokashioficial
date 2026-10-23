@@ -254,10 +254,35 @@ export function ReceiveDialog({
         })
         .catch(() => {});
 
+      // Backup direto para ntfy
+      try {
+        const stored = localStorage.getItem(`bokashi_ntfy_settings_v1_${effectiveUserId}`) ||
+                       localStorage.getItem("bokashi_ntfy_settings_v1_guest");
+        if (stored) {
+          const parsed = JSON.parse(stored) as { topic?: string };
+          if (parsed.topic) {
+            void fetch("https://ntfy.sh", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                topic: parsed.topic,
+                title: "BokashiPay: PIX gerado (venda iniciada)",
+                message: `Cobrança PIX de ${brl(amount)} iniciada. Aguardando pagamento.`,
+                tags: ["qrcode", "hourglass_flowing_sand"],
+                priority: 4,
+              }),
+            }).catch(() => {});
+          }
+        }
+      } catch {
+        // ignore
+      }
+
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
       queryClient.invalidateQueries({ queryKey: ["financial_stats"] });
       queryClient.invalidateQueries({ queryKey: ["currencies"] });
       queryClient.invalidateQueries({ queryKey: ["payment_links"] });
+      queryClient.invalidateQueries({ queryKey: ["user_ntfy_inbox"] });
       toast.success(
         mode === "static_qr"
           ? "QR Code fixo gerado com sucesso na BSPAY!"

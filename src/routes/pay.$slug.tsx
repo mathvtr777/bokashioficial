@@ -219,6 +219,21 @@ function PublicPaymentLinkCheckoutPage() {
         link.userId
       );
       setGeneratedPayment(result);
+
+      // Dispara notificação push para o vendedor / merchant
+      try {
+        void fetch("/api/ntfy/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: link.userId || "guest",
+            title: "BokashiPay: PIX gerado (checkout aberto)",
+            message: `Cliente iniciou pagamento de ${brl(finalAmountToCharge)} no link "${link.title}".`,
+          }),
+        }).catch(() => {});
+      } catch {
+        // ignore
+      }
       toast.success(
         selectedMethod === "pix"
           ? "QR Code PIX gerado com sucesso!"
