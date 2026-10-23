@@ -249,13 +249,44 @@ const CURRENCY_OPTIONS = [
   { code: "BNB", label: "BNB" },
 ];
 
+function getLinkStatusInfo(link: PaymentLinkRecord) {
+  if (link.status === "inactive") {
+    return {
+      label: "Inativo",
+      className: "border-border bg-surface-2 text-muted-foreground",
+    };
+  }
+  if (link.status === "expired") {
+    return {
+      label: "Expirado",
+      className: "border-destructive/30 bg-destructive/15 text-destructive",
+    };
+  }
+  if (link.status === "completed") {
+    return {
+      label: "Concluído",
+      className: "border-primary/30 bg-primary/15 text-primary",
+    };
+  }
+  if (link.paymentsCount > 0 || link.status === "paid") {
+    return {
+      label: "Pago",
+      className: "border-primary/30 bg-primary/15 text-primary",
+    };
+  }
+  return {
+    label: "Pendente",
+    className: "border-warning/30 bg-warning/15 text-warning",
+  };
+}
+
 export function PaymentLinksManager() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
-    "ALL" | "active" | "inactive" | "expired"
+    "ALL" | "pending" | "paid" | "active" | "inactive" | "expired"
   >("ALL");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [sortField, setSortField] = useState<
@@ -314,12 +345,16 @@ export function PaymentLinksManager() {
 
   const kpis = useMemo(() => {
     const totalLinks = links.length;
-    const activeLinks = links.filter((l) => l.status === "active").length;
+    const activeLinks = links.filter((l) => l.status === "active" || l.status === "pending").length;
+    const pendingLinks = links.filter(
+      (l) => (l.status === "pending" || l.status === "active") && l.paymentsCount === 0
+    ).length;
     const totalPayments = links.reduce((acc, l) => acc + l.paymentsCount, 0);
     const totalReceived = links.reduce((acc, l) => acc + l.totalReceived, 0);
     return {
       totalLinks,
       activeLinks,
+      pendingLinks,
       totalPayments,
       totalReceived,
     };
@@ -328,7 +363,21 @@ export function PaymentLinksManager() {
   const filteredLinks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const filtered = links.filter((l) => {
-      if (statusFilter === "active" && l.status !== "active") return false;
+      const isPending =
+        (l.status === "pending" || l.status === "active") &&
+        l.paymentsCount === 0;
+      const isPaid =
+        l.paymentsCount > 0 || l.status === "paid" || l.status === "completed";
+
+      if (statusFilter === "pending" && !isPending) return false;
+      if (statusFilter === "paid" && !isPaid) return false;
+      if (
+        statusFilter === "active" &&
+        l.status !== "active" &&
+        l.status !== "pending"
+      ) {
+        return false;
+      }
       if (statusFilter === "inactive" && l.status !== "inactive") return false;
       if (
         statusFilter === "expired" &&
@@ -474,10 +523,7 @@ export function PaymentLinksManager() {
   };
 
   const handleSaveLink = async () => {
-    if (!user?.id) {
-      toast.error("Faça login na sua conta para criar um link de pagamento.");
-      return;
-    }
+    const effectiveUserId = user?.id || "guest";
 
     const effectiveTitle =
       title.trim() ||
@@ -501,7 +547,7 @@ export function PaymentLinksManager() {
     setSubmitting(true);
     try {
       const payload = {
-        userId: user.id,
+        userId: effectiveUserId,
         title: effectiveTitle,
         description: description.trim() || null,
         amount: numericAmount,
@@ -531,7 +577,7 @@ export function PaymentLinksManager() {
       };
 
       if (editingLink) {
-        await updateUserPaymentLink(editingLink.id, user.id, payload);
+        await updateUserPaymentLink(editingLink.id, effectiveUserId, payload);
         toast.success("Link de pagamento atualizado com sucesso!");
       } else {
         const created = await createUserPaymentLink(payload);
@@ -550,7 +596,7 @@ export function PaymentLinksManager() {
       }
 
       await queryClient.invalidateQueries({
-        queryKey: ["payment_links", user.id],
+        queryKey: ["payment_links"],
       });
       setDrawerOpen(false);
       resetForm();
@@ -583,12 +629,15 @@ export function PaymentLinksManager() {
   };
 
   const handleToggleStatus = async (link: PaymentLinkRecord) => {
-    if (!user?.id) return;
-    const nextStatus = link.status === "active" ? "inactive" : "active";
+    const effectiveUserId = user?.id || "guest";
+    const nextStatus =
+      link.status === "active" || link.status === "pending"
+        ? "inactive"
+        : "active";
     try {
-      await toggleUserPaymentLinkStatus(link.id, user.id, nextStatus);
+      await toggleUserPaymentLinkStatus(link.id, effectiveUserId, nextStatus);
       await queryClient.invalidateQueries({
-        queryKey: ["payment_links", user.id],
+        queryKey: ["payment_links"],
       });
       toast.success(
         nextStatus === "active"
@@ -601,11 +650,11 @@ export function PaymentLinksManager() {
   };
 
   const handleDelete = async (link: PaymentLinkRecord) => {
-    if (!user?.id) return;
+    const effectiveUserId = user?.id || "guest";
     try {
-      await deleteUserPaymentLink(link.id, user.id);
+      await deleteUserPaymentLink(link.id, effectiveUserId);
       await queryClient.invalidateQueries({
-        queryKey: ["payment_links", user.id],
+        queryKey: ["payment_links"],
       });
       toast.success(`Link "${link.title}" removido.`);
     } catch {
@@ -706,6 +755,10 @@ export function PaymentLinksManager() {
                 <span>
                   {statusFilter === "ALL"
                     ? "Filtros"
+                    : statusFilter === "pending"
+                    ? "Pendentes"
+                    : statusFilter === "paid"
+                    ? "Pagos"
                     : statusFilter === "active"
                     ? "Ativos"
                     : statusFilter === "inactive"
@@ -716,11 +769,13 @@ export function PaymentLinksManager() {
               </button>
 
               {filterMenuOpen && (
-                <div className="absolute right-0 top-full z-20 mt-1.5 w-44 rounded-xl border border-border bg-[#121514] p-1 shadow-xl">
+                <div className="absolute right-0 top-full z-20 mt-1.5 w-52 rounded-xl border border-border bg-[#121514] p-1 shadow-xl">
                   {(
                     [
                       { key: "ALL", label: "Todos os links" },
-                      { key: "active", label: "Apenas ativos" },
+                      { key: "pending", label: "Pendentes (Aguardando)" },
+                      { key: "paid", label: "Pagos / Realizados" },
+                      { key: "active", label: "Ativos" },
                       { key: "inactive", label: "Pausados / Inativos" },
                       { key: "expired", label: "Expirados / Concluídos" },
                     ] as const
@@ -876,27 +931,20 @@ export function PaymentLinksManager() {
                         </td>
 
                         <td className="px-4 py-3.5">
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
-                              link.status === "active" &&
-                                "border-primary/30 bg-primary/15 text-primary",
-                              link.status === "inactive" &&
-                                "border-border bg-surface-2 text-muted-foreground",
-                              (link.status === "expired" ||
-                                link.status === "completed") &&
-                                "border-warning/30 bg-warning/15 text-warning"
-                            )}
-                          >
-                            <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                            {link.status === "active"
-                              ? "Ativo"
-                              : link.status === "inactive"
-                              ? "Inativo"
-                              : link.status === "completed"
-                              ? "Limite atingido"
-                              : "Expirado"}
-                          </span>
+                          {(() => {
+                            const s = getLinkStatusInfo(link);
+                            return (
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+                                  s.className
+                                )}
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                                {s.label}
+                              </span>
+                            );
+                          })()}
                         </td>
 
                         <td className="px-4 py-3.5 tabular font-semibold text-foreground">

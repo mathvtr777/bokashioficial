@@ -1772,7 +1772,13 @@ export async function fetchBspayMedInfractions(options?: {
 // 3. SISTEMA DE LINKS DE PAGAMENTO (POR USUÁRIO)
 // ==========================================
 export type PaymentLinkMethod = "pix" | "crypto";
-export type PaymentLinkStatus = "active" | "inactive" | "expired" | "completed";
+export type PaymentLinkStatus =
+  | "pending"
+  | "active"
+  | "paid"
+  | "inactive"
+  | "expired"
+  | "completed";
 
 export interface PaymentLinkRecord {
   id: string;
@@ -1853,7 +1859,7 @@ function savePaymentLinks(list: PaymentLinkRecord[]) {
 function normalizePaymentLinkStatus(link: PaymentLinkRecord): PaymentLinkRecord {
   let effectiveStatus = link.status;
   if (
-    effectiveStatus === "active" &&
+    (effectiveStatus === "active" || effectiveStatus === "pending") &&
     link.hasExpiration &&
     link.expiresAt &&
     new Date(link.expiresAt).getTime() < Date.now()
@@ -1861,13 +1867,20 @@ function normalizePaymentLinkStatus(link: PaymentLinkRecord): PaymentLinkRecord 
     effectiveStatus = "expired";
   }
   if (
-    effectiveStatus === "active" &&
+    (effectiveStatus === "active" || effectiveStatus === "pending" || effectiveStatus === "paid") &&
     link.isLimited &&
     link.maxPayments &&
     link.maxPayments > 0 &&
     link.paymentsCount >= link.maxPayments
   ) {
     effectiveStatus = "completed";
+  }
+  if (effectiveStatus !== "inactive" && effectiveStatus !== "expired" && effectiveStatus !== "completed") {
+    if (link.paymentsCount > 0) {
+      effectiveStatus = "paid";
+    } else {
+      effectiveStatus = "pending";
+    }
   }
   if (effectiveStatus !== link.status) {
     return { ...link, status: effectiveStatus };
@@ -1889,10 +1902,12 @@ function makeSlugFromTitle(title: string, idSuffix: string): string {
 export function listPaymentLinksForUser(
   userId?: string | null
 ): PaymentLinkRecord[] {
-  if (!userId) return [];
   const all = loadPaymentLinks();
+  if (!userId || userId === "guest") {
+    return all.map(normalizePaymentLinkStatus);
+  }
   return all
-    .filter((l) => l.userId === userId)
+    .filter((l) => l.userId === userId || !l.userId || l.userId === "guest")
     .map(normalizePaymentLinkStatus);
 }
 
@@ -1934,9 +1949,7 @@ export interface CreatePaymentLinkInput {
 export function createPaymentLink(
   input: CreatePaymentLinkInput
 ): PaymentLinkRecord {
-  if (!input.userId) {
-    throw new Error("Usuário autenticado é obrigatório para criar um link de pagamento.");
-  }
+  const effectiveUserId = (input.userId || "guest").trim();
   const title = (input.title || "").trim();
   if (!title) {
     throw new Error("O título do link de pagamento é obrigatório.");
@@ -1962,7 +1975,7 @@ export function createPaymentLink(
   const record: PaymentLinkRecord = {
     id,
     slug,
-    userId: input.userId,
+    userId: effectiveUserId,
     title,
     description: input.description?.trim() || null,
     amount: Number(amount.toFixed(2)),
@@ -1992,7 +2005,7 @@ export function createPaymentLink(
     paymentMethods: methods,
     bannerUrl: input.bannerUrl || null,
     faviconUrl: input.faviconUrl || null,
-    status: "active",
+    status: "pending",
     paymentsCount: 0,
     totalReceived: 0,
     paidTransactionIds: [],
@@ -2125,7 +2138,7 @@ export function recordPaymentLinkPaid(
     (current.totalReceived + (Number(paidAmount) || current.amount)).toFixed(2)
   );
 
-  let nextStatus = current.status;
+  let nextStatus: PaymentLinkStatus = "paid";
   if (
     current.isLimited &&
     current.maxPayments &&

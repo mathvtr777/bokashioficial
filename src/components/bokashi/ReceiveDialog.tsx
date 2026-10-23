@@ -25,6 +25,8 @@ import {
   type ReceiveMode,
   type ReceiveResult,
 } from "@/services/receives";
+import { createUserPaymentLink } from "@/services/payment-links";
+import { saveLocalTransaction } from "@/services/transactions";
 import { brl } from "@/data/mock";
 import { cn } from "@/lib/utils";
 
@@ -172,6 +174,7 @@ export function ReceiveDialog({
           queryClient.invalidateQueries({ queryKey: ["transactions"] });
           queryClient.invalidateQueries({ queryKey: ["financial_stats"] });
           queryClient.invalidateQueries({ queryKey: ["currencies"] });
+          queryClient.invalidateQueries({ queryKey: ["payment_links"] });
           toast.success("Pagamento PIX confirmado!", {
             description: `Valor creditado: ${brl(
               Math.max(0, actualAmount - actualFee)
@@ -218,9 +221,43 @@ export function ReceiveDialog({
       ),
     onSuccess: (res) => {
       setGeneratedPayment(res);
+      const effectiveUserId = user?.id || "guest";
+
+      const now = new Date();
+      saveLocalTransaction(effectiveUserId, {
+        id: res.transactionId || res.externalId,
+        externalId: res.externalId,
+        name: description.trim() || `Cobrança PIX — ${brl(amount)}`,
+        type: "Entrada",
+        value: amount,
+        status: "Pendente",
+        date: now.toLocaleDateString("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        rawDate: now.toISOString(),
+        userId: user?.id ?? undefined,
+      });
+
+      void createUserPaymentLink({
+        userId: effectiveUserId,
+        title: description.trim() || `Cobrança PIX ${brl(amount)}`,
+        amount,
+        currency: selectedCurrency,
+        passFeeToCustomer: false,
+        paymentMethods: ["pix"],
+      })
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["payment_links"] });
+        })
+        .catch(() => {});
+
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
       queryClient.invalidateQueries({ queryKey: ["financial_stats"] });
       queryClient.invalidateQueries({ queryKey: ["currencies"] });
+      queryClient.invalidateQueries({ queryKey: ["payment_links"] });
       toast.success(
         mode === "static_qr"
           ? "QR Code fixo gerado com sucesso na BSPAY!"
